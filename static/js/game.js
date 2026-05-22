@@ -6,7 +6,7 @@
 import { CONFIG, LEVELS } from './config.js';
 import { SOUND } from './audio.js';
 import { MapManager } from './map.js';
-import { PlayerTank, EnemyTank, PowerUp, Particle } from './entities.js';
+import { PlayerTank, EnemyTank, PowerUp, Particle, Bullet } from './entities.js';
 import { LevelEditor } from './editor.js';
 
 class GameEngine {
@@ -25,7 +25,32 @@ class GameEngine {
     this.enemies = [];
     this.bullets = [];
     this.powerUps = [];
-    this.particles = [];
+    
+    // Remote Multiplayer state
+    this.isRemote = false;
+    this.isHost = false;
+    this.myPlayerIndex = 0;
+    this.wsConnection = null;
+    this.remoteRoomId = "";
+    this.clientInputs = { up: false, down: false, left: false, right: false, fire: false };
+    this.netTickTimer = 0;
+    this.originalSoundMethods = null;
+    
+    // Map mutation hook
+    this.mapManager.onMapMutation = (row, col, cellType, subTiles) => {
+      if (this.isRemote && this.isHost) {
+        this.sendWs({
+          type: 'MAP_MUTATION',
+          row: row,
+          col: col,
+          cellType: cellType,
+          subTiles: subTiles
+        });
+      }
+    };
+    
+    this.setupParticlesArray();
+
     
     // Level progress wave manager
     this.currentLevelIndex = 0;
@@ -57,7 +82,25 @@ class GameEngine {
     this.lastTime = 0;
   }
 
+  setupParticlesArray() {
+    this.particles = [];
+    this.particles.push = (...items) => {
+      Array.prototype.push.apply(this.particles, items);
+      if (this.isRemote && this.isHost && items.length > 0) {
+        const first = items[0];
+        this.sendWs({
+          type: 'PARTICLES',
+          x: first.x,
+          y: first.y,
+          color: first.color,
+          count: items.length
+        });
+      }
+    };
+  }
+
   /**
+
    * Runs the initial project bindings and DOM overlays
    */
   init() {
@@ -110,6 +153,11 @@ class GameEngine {
       this.changeState('LEVEL_SELECT');
     };
     
+    document.getElementById('btnRemoteCoOp').onclick = () => {
+      SOUND.init();
+      this.changeState('REMOTE_LOBBY');
+    };
+    
     document.getElementById('btnEditor').onclick = () => {
       SOUND.init();
       this.changeState('EDITOR');
@@ -128,15 +176,45 @@ class GameEngine {
       this.changeState('MENU');
     };
     
+    // Remote lobby button bindings
+    document.getElementById('btnRemoteBack').onclick = () => {
+      this.disconnectWs();
+      this.changeState('MENU');
+    };
+    
+    document.getElementById('btnCreateRoom').onclick = () => {
+      SOUND.init();
+      const roomId = String(Math.floor(1000 + Math.random() * 9000));
+      this.connectRemote(roomId, true);
+    };
+    
+    document.getElementById('btnJoinRoom').onclick = () => {
+      SOUND.init();
+      const input = document.getElementById('inputRoomId');
+      const roomId = input.value.trim();
+      if (roomId.length !== 4 || isNaN(roomId)) {
+        alert('请输入4位数字房间号！');
+        return;
+      }
+      this.connectRemote(roomId, false);
+    };
+    
+    document.getElementById('btnStartRemoteLevel').onclick = () => {
+      this.changeState('LEVEL_SELECT');
+    };
+    
     // Game overlay cards
     document.getElementById('btnRetry').onclick = () => {
+      if (this.isRemote && !this.isHost) return; // Client cannot retry
       this.startCampaignLevel(this.currentLevelIndex);
     };
     document.getElementById('btnGameOverMenu').onclick = () => {
+      if (this.isRemote) this.disconnectWs();
       this.changeState('MENU');
     };
     
     document.getElementById('btnNextLevel').onclick = () => {
+      if (this.isRemote && !this.isHost) return; // Client cannot advance
       if (this.currentLevelIndex + 1 < LEVELS.length) {
         this.startCampaignLevel(this.currentLevelIndex + 1);
       } else {
@@ -145,6 +223,7 @@ class GameEngine {
       }
     };
     document.getElementById('btnVictoryMenu').onclick = () => {
+      if (this.isRemote) this.disconnectWs();
       this.changeState('MENU');
     };
     
@@ -153,6 +232,7 @@ class GameEngine {
       this.changeState('PLAYING');
     };
     document.getElementById('btnQuitGame').onclick = () => {
+      if (this.isRemote) this.disconnectWs();
       this.changeState('MENU');
     };
 
@@ -178,6 +258,7 @@ class GameEngine {
     };
   }
 
+
   changeState(newState) {
     this.state = newState;
     
@@ -187,6 +268,7 @@ class GameEngine {
     document.getElementById('gameOverScreen').classList.add('hidden');
     document.getElementById('victoryScreen').classList.add('hidden');
     document.getElementById('pauseOverlay').classList.add('hidden');
+    document.getElementById('remoteLobbyScreen').classList.add('hidden');
     
     // Sound adjustments
     SOUND.silenceEngine();
@@ -198,12 +280,22 @@ class GameEngine {
         this.enemies = [];
         this.bullets = [];
         this.powerUps = [];
-        this.particles = [];
+        this.setupParticlesArray();
         break;
         
       case 'LEVEL_SELECT':
         this.renderLevelSelectGrid();
         document.getElementById('levelSelectScreen').classList.remove('hidden');
+        break;
+        
+      case 'REMOTE_LOBBY':
+        document.getElementById('remoteLobbyScreen').classList.remove('hidden');
+        document.getElementById('remoteLobbyOptions').classList.remove('hidden');
+        document.getElementById('remoteWaitingPanel').classList.add('hidden');
+        document.getElementById('remoteConnectedPanel').classList.add('hidden');
+        document.getElementById('btnStartRemoteLevel').classList.add('hidden');
+        document.getElementById('lblRoomId').innerText = '----';
+        document.getElementById('inputRoomId').value = '';
         break;
         
       case 'PLAYING':
@@ -231,6 +323,7 @@ class GameEngine {
     }
   }
 
+
   renderLevelSelectGrid() {
     const grid = document.getElementById('levelCardGrid');
     grid.innerHTML = ''; // reset
@@ -254,16 +347,29 @@ class GameEngine {
   /**
    * Initializes campaign levels using predesigned config levels
    */
-  startCampaignLevel(levelIndex) {
+  startCampaignLevel(levelIndex, bypassBroadcast = false) {
     this.currentLevelIndex = levelIndex;
     this.customMapLayout = null;
+    
+    if (this.isRemote) {
+      this.isCoOp = true;
+    }
     
     const layout = LEVELS[levelIndex];
     this.parseSpawnsAndLoad(layout);
     
     document.getElementById('hudLevelVal').innerText = `关卡 ${levelIndex + 1}`;
+    
+    if (this.isRemote && this.isHost && !bypassBroadcast) {
+      this.sendWs({
+        type: 'START_LEVEL',
+        levelIndex: levelIndex
+      });
+    }
+    
     this.changeState('PLAYING');
   }
+
 
   /**
    * Launches playtest directly from editor grid
@@ -333,9 +439,10 @@ class GameEngine {
     this.enemies = [];
     this.bullets = [];
     this.powerUps = [];
-    this.particles = [];
+    this.setupParticlesArray();
     this.enemyFreezeTimer = 0;
     this.spawnTimer = 0;
+
     
     this.updateHUDGlobalStats();
   }
@@ -387,10 +494,23 @@ class GameEngine {
   }
 
   update(dt) {
+    if (this.isRemote && !this.isHost) {
+      // Client only updates local particle animations & animations like water/shovel
+      this.particles.forEach(p => {
+        if (p.active) p.update(dt);
+      });
+      this.particles = this.particles.filter(p => p.active);
+      this.mapManager.update(dt);
+      
+      this.sendClientInputs();
+      return;
+    }
+
     // 1. Countdown screen shake
     if (this.shakeTimer > 0) {
       this.shakeTimer -= 16.67 * dt;
     }
+
     
     // 2. Countdown freezing states
     if (this.enemyFreezeTimer > 0) {
@@ -515,11 +635,48 @@ class GameEngine {
     
     // 11. State assessment: Game Over or Stage Clear
     this.checkGameConditions();
+
+    // Broadcast state to P2 (Client)
+    if (this.isRemote && this.isHost) {
+      this.netTickTimer += 16.67 * dt;
+      const interval = 1000 / CONFIG.NET_TICK_RATE;
+      if (this.netTickTimer >= interval) {
+        this.netTickTimer = 0;
+        this.broadcastGameState();
+      }
+    }
   }
+
 
   handlePlayerInput(player, index, dt) {
     let dx = 0;
     let dy = 0;
+    
+    // Remote client inputs read
+    if (this.isRemote && index === 1) {
+      if (this.clientInputs.up) {
+        dy = -player.speed;
+        player.direction = 'UP';
+      } else if (this.clientInputs.down) {
+        dy = player.speed;
+        player.direction = 'DOWN';
+      } else if (this.clientInputs.left) {
+        dx = -player.speed;
+        player.direction = 'LEFT';
+      } else if (this.clientInputs.right) {
+        dx = player.speed;
+        player.direction = 'RIGHT';
+      }
+      
+      // Commit coordinates
+      player.move(dx * dt, dy * dt, this.mapManager);
+      
+      // Fire lasers
+      if (this.clientInputs.fire) {
+        player.fire(this.bullets);
+      }
+      return;
+    }
     
     const controls = index === 0 ? {
       up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', fire: 'Space'
@@ -833,6 +990,331 @@ class GameEngine {
       entA.y < entB.y + entB.height &&
       entA.y + entA.height > entB.y
     );
+  }
+
+  /**
+   * Establish WebSocket connection to FastAPI signaling server
+   */
+  connectRemote(roomId, isHost) {
+    this.isRemote = true;
+    this.isHost = isHost;
+    this.remoteRoomId = roomId;
+    this.myPlayerIndex = isHost ? 0 : 1;
+
+    // Build URL dynamically
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/ws/room/${roomId}/${this.myPlayerIndex}`;
+
+    // Close any prior connection safely
+    if (this.wsConnection) {
+      this.wsConnection.onclose = null;
+      this.wsConnection.close();
+    }
+
+    this.wsConnection = new WebSocket(wsUrl);
+
+    this.wsConnection.onopen = () => {
+      document.getElementById('remoteLobbyOptions').classList.add('hidden');
+      if (this.isHost) {
+        document.getElementById('remoteWaitingPanel').classList.remove('hidden');
+        document.getElementById('lblRoomId').innerText = roomId;
+
+        // Proxy Sound on Host side to broadcast sound cues
+        this.originalSoundMethods = {
+          playShoot: SOUND.playShoot.bind(SOUND),
+          playExplosion: SOUND.playExplosion.bind(SOUND),
+          playPowerUpSpawn: SOUND.playPowerUpSpawn.bind(SOUND),
+          playPowerUpCollect: SOUND.playPowerUpCollect.bind(SOUND),
+          playBaseHit: SOUND.playBaseHit.bind(SOUND),
+          playVictory: SOUND.playVictory.bind(SOUND),
+          playGameOver: SOUND.playGameOver.bind(SOUND)
+        };
+
+        SOUND.playShoot = (playerIndex, speedUp) => {
+          this.originalSoundMethods.playShoot(playerIndex, speedUp);
+          this.sendWs({ type: 'SOUND_TRIGGER', method: 'playShoot', args: [playerIndex, speedUp] });
+        };
+        SOUND.playExplosion = (isLarge) => {
+          this.originalSoundMethods.playExplosion(isLarge);
+          this.sendWs({ type: 'SOUND_TRIGGER', method: 'playExplosion', args: [isLarge] });
+        };
+        SOUND.playPowerUpSpawn = () => {
+          this.originalSoundMethods.playPowerUpSpawn();
+          this.sendWs({ type: 'SOUND_TRIGGER', method: 'playPowerUpSpawn', args: [] });
+        };
+        SOUND.playPowerUpCollect = () => {
+          this.originalSoundMethods.playPowerUpCollect();
+          this.sendWs({ type: 'SOUND_TRIGGER', method: 'playPowerUpCollect', args: [] });
+        };
+        SOUND.playBaseHit = () => {
+          this.originalSoundMethods.playBaseHit();
+          this.sendWs({ type: 'SOUND_TRIGGER', method: 'playBaseHit', args: [] });
+        };
+        SOUND.playVictory = () => {
+          this.originalSoundMethods.playVictory();
+          this.sendWs({ type: 'SOUND_TRIGGER', method: 'playVictory', args: [] });
+        };
+        SOUND.playGameOver = () => {
+          this.originalSoundMethods.playGameOver();
+          this.sendWs({ type: 'SOUND_TRIGGER', method: 'playGameOver', args: [] });
+        };
+      } else {
+        document.getElementById('remoteConnectedPanel').classList.remove('hidden');
+        document.getElementById('lblRemoteStatus').innerText = '连接成功，等待 P1 主机开启战局...';
+      }
+    };
+
+    this.wsConnection.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      switch (msg.type) {
+        case 'PLAYER_JOINED':
+          document.getElementById('remoteWaitingPanel').classList.add('hidden');
+          document.getElementById('remoteConnectedPanel').classList.remove('hidden');
+          if (this.isHost) {
+            document.getElementById('btnStartRemoteLevel').classList.remove('hidden');
+            document.getElementById('lblRemoteStatus').innerText = '双方战机连接成功！请点击下方按钮开始关卡选择！';
+          } else {
+            document.getElementById('remoteLobbyOptions').classList.add('hidden');
+            document.getElementById('lblRemoteStatus').innerText = '双方战机连接成功！正在等待主机（Player 1）选关并开火启航...';
+          }
+          break;
+
+        case 'START_LEVEL':
+          this.startCampaignLevel(msg.levelIndex, true); // true to bypass sending START_LEVEL again
+          break;
+
+        case 'MAP_MUTATION':
+          this.mapManager.mutateCell(msg.row, msg.col, msg.cellType, msg.subTiles);
+          break;
+
+        case 'PARTICLES':
+          const ParticleClass = Particle;
+          for (let i = 0; i < msg.count; i++) {
+            this.particles.push(new ParticleClass(msg.x, msg.y, msg.color));
+          }
+          break;
+
+        case 'SOUND_TRIGGER':
+          this.playRemoteSound(msg.method, msg.args);
+          break;
+
+        case 'CLIENT_UPDATE':
+          this.clientInputs = msg.inputs;
+          break;
+
+        case 'STATE_UPDATE':
+          this.applyStateUpdate(msg);
+          break;
+
+        case 'PEER_DISCONNECTED':
+          alert('战机被迫断开连接！队友已离线。');
+          this.disconnectWs();
+          this.changeState('MENU');
+          break;
+      }
+    };
+
+    this.wsConnection.onclose = () => {
+      if (this.isRemote) {
+        alert('联机已断开，返回主菜单。');
+        this.disconnectWs();
+        this.changeState('MENU');
+      }
+    };
+
+    this.wsConnection.onerror = (e) => {
+      console.error('WebSocket Error: ', e);
+    };
+  }
+
+  /**
+   * Safe and dry websocket stringified dispatcher
+   */
+  sendWs(payload) {
+    if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
+      this.wsConnection.send(JSON.stringify(payload));
+    }
+  }
+
+  /**
+   * Restores network properties and unhooks custom proxied SOUND handlers
+   */
+  disconnectWs() {
+    this.isRemote = false;
+    this.isHost = false;
+    this.myPlayerIndex = 0;
+    if (this.wsConnection) {
+      this.wsConnection.onclose = null;
+      this.wsConnection.close();
+      this.wsConnection = null;
+    }
+    if (this.originalSoundMethods) {
+      SOUND.playShoot = this.originalSoundMethods.playShoot;
+      SOUND.playExplosion = this.originalSoundMethods.playExplosion;
+      SOUND.playPowerUpSpawn = this.originalSoundMethods.playPowerUpSpawn;
+      SOUND.playPowerUpCollect = this.originalSoundMethods.playPowerUpCollect;
+      SOUND.playBaseHit = this.originalSoundMethods.playBaseHit;
+      SOUND.playVictory = this.originalSoundMethods.playVictory;
+      SOUND.playGameOver = this.originalSoundMethods.playGameOver;
+      this.originalSoundMethods = null;
+    }
+    this.clientInputs = { up: false, down: false, left: false, right: false, fire: false };
+  }
+
+  /**
+   * Play remote sound locally triggered by host
+   */
+  playRemoteSound(name, args) {
+    if (SOUND[name]) {
+      SOUND[name](...args);
+    }
+  }
+
+  /**
+   * Client gathers local WASD/Space or Arrow/Enter inputs and sends them to Host
+   */
+  sendClientInputs() {
+    const inputs = {
+      up: !!(this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']),
+      down: !!(this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']),
+      left: !!(this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']),
+      right: !!(this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']),
+      fire: !!(this.keysPressed['Space'] || this.keysPressed['Enter'])
+    };
+    this.sendWs({
+      type: 'CLIENT_UPDATE',
+      inputs: inputs
+    });
+  }
+
+  /**
+   * Host serializes fully simulated state array variables and broadcasts them to client
+   */
+  broadcastGameState() {
+    const state = {
+      type: 'STATE_UPDATE',
+      levelIndex: this.currentLevelIndex,
+      enemiesSpawned: this.enemiesSpawnedCount,
+      enemiesTotal: this.enemiesTotalCount,
+      enemiesRemaining: this.enemiesRemainingCount,
+      baseDestroyed: this.mapManager.baseDestroyed,
+      shovelActive: this.mapManager.shovelActive,
+      shovelTimer: this.mapManager.shovelTimer,
+      players: this.players.map(p => ({
+        active: p.active,
+        x: p.x,
+        y: p.y,
+        direction: p.direction,
+        health: p.health,
+        maxHealth: p.maxHealth,
+        lives: p.lives,
+        score: p.score,
+        tier: p.tier,
+        shieldTime: p.shieldTime,
+        treadAnimationTick: p.treadAnimationTick,
+        isMoving: p.isMoving
+      })),
+      enemies: this.enemies.map(e => ({
+        active: e.active,
+        x: e.x,
+        y: e.y,
+        direction: e.direction,
+        health: e.health,
+        maxHealth: e.maxHealth,
+        typeName: e.typeName,
+        flashing: e.flashing,
+        shieldTime: e.shieldTime,
+        treadAnimationTick: e.treadAnimationTick,
+        color: e.color
+      })),
+      bullets: this.bullets.map(b => ({
+        active: b.active,
+        x: b.x,
+        y: b.y,
+        size: b.size,
+        direction: b.direction,
+        isPlayerBullet: b.isPlayerBullet,
+        playerIndex: b.playerIndex,
+        trail: b.trail
+      })),
+      powerUps: this.powerUps.map(p => ({
+        active: p.active,
+        x: p.x,
+        y: p.y,
+        type: p.type,
+        pulseAngle: p.pulseAngle
+      }))
+    };
+    this.sendWs(state);
+  }
+
+  /**
+   * Client overrides local variables and handles simple HUD re-rendering
+   */
+  applyStateUpdate(msg) {
+    this.currentLevelIndex = msg.levelIndex;
+    this.enemiesSpawnedCount = msg.enemiesSpawned;
+    this.enemiesTotalCount = msg.enemiesTotal;
+    this.enemiesRemainingCount = msg.enemiesRemaining;
+    this.mapManager.baseDestroyed = msg.baseDestroyed;
+    this.mapManager.shovelActive = msg.shovelActive;
+    this.mapManager.shovelTimer = msg.shovelTimer;
+
+    // Ensure players exist and sync properties
+    msg.players.forEach((pData, idx) => {
+      const player = this.players[idx];
+      if (player) {
+        player.active = pData.active;
+        player.x = pData.x;
+        player.y = pData.y;
+        player.direction = pData.direction;
+        player.health = pData.health;
+        player.maxHealth = pData.maxHealth;
+        player.lives = pData.lives;
+        player.score = pData.score;
+        player.tier = pData.tier;
+        player.shieldTime = pData.shieldTime;
+        player.treadAnimationTick = pData.treadAnimationTick;
+        player.isMoving = pData.isMoving;
+        this.updateHUDPlayerStats(idx);
+      }
+    });
+
+    // Reconstruct enemies
+    const EnemyClass = EnemyTank;
+    this.enemies = msg.enemies.map(eData => {
+      const enemy = new EnemyClass(eData.x, eData.y, eData.typeName, eData.flashing);
+      enemy.active = eData.active;
+      enemy.direction = eData.direction;
+      enemy.health = eData.health;
+      enemy.maxHealth = eData.maxHealth;
+      enemy.shieldTime = eData.shieldTime;
+      enemy.treadAnimationTick = eData.treadAnimationTick;
+      enemy.color = eData.color;
+      return enemy;
+    });
+
+    // Reconstruct bullets
+    const BulletClass = Bullet;
+    this.bullets = msg.bullets.map(bData => {
+      const bullet = new BulletClass(bData.x, bData.y, bData.direction, bData.isPlayerBullet, bData.playerIndex);
+      bullet.active = bData.active;
+      bullet.size = bData.size;
+      bullet.trail = bData.trail;
+      return bullet;
+    });
+
+    // Reconstruct powerups
+    const PowerUpClass = PowerUp;
+    this.powerUps = msg.powerUps.map(pData => {
+      const p = new PowerUpClass(pData.x, pData.y, pData.type);
+      p.active = pData.active;
+      p.pulseAngle = pData.pulseAngle;
+      return p;
+    });
+
+    this.updateHUDGlobalStats();
   }
 }
 

@@ -49,6 +49,18 @@ export class MapManager {
   }
 
   /**
+   * Directly mutates a specific cell's type and sub-tiles (used by remote client)
+   */
+  mutateCell(r, c, type, subTiles) {
+    if (r < 0 || r >= CONFIG.GRID_ROWS || c < 0 || c >= CONFIG.GRID_COLS) return;
+    this.grid[r][c] = {
+      type: type,
+      subTiles: subTiles ? [...subTiles] : null
+    };
+  }
+
+
+  /**
    * Upgrades the base surrounding walls to steel (shovel pickup) or reverts them
    */
   setBaseShieldWalls(toSteel) {
@@ -77,6 +89,9 @@ export class MapManager {
           type: CONFIG.TILE_TYPES.STEEL,
           subTiles: null
         };
+        if (this.onMapMutation) {
+          this.onMapMutation(coord.r, coord.c, CONFIG.TILE_TYPES.STEEL, null);
+        }
       });
     } else {
       if (!this.shovelActive) return;
@@ -87,6 +102,9 @@ export class MapManager {
       this.originalBaseWalls.forEach(saved => {
         // Make sure it wasn't overwritten by editing or other logic
         this.grid[saved.r][saved.c] = saved.state;
+        if (this.onMapMutation) {
+          this.onMapMutation(saved.r, saved.c, saved.state.type, saved.state.subTiles);
+        }
       });
       this.originalBaseWalls = [];
     }
@@ -479,6 +497,10 @@ export class MapManager {
         if (cell.subTiles.every(active => !active)) {
           this.grid[row][col] = { type: CONFIG.TILE_TYPES.EMPTY, subTiles: null };
         }
+        if (this.onMapMutation) {
+          const currentCell = this.grid[row][col];
+          this.onMapMutation(row, col, currentCell.type, currentCell.subTiles);
+        }
         return true; // bullet explodes
       }
       return false; // didn't clip a sub-tile yet
@@ -489,6 +511,9 @@ export class MapManager {
       if (bullet.piercesSteel) {
         // Bullet with Super Gun powerup penetrates steel!
         this.grid[row][col] = { type: CONFIG.TILE_TYPES.EMPTY, subTiles: null };
+        if (this.onMapMutation) {
+          this.onMapMutation(row, col, CONFIG.TILE_TYPES.EMPTY, null);
+        }
         SOUND.playExplosion(false);
       }
       return true; // bullet explodes

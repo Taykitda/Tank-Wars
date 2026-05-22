@@ -6,6 +6,8 @@ export const CONFIG = {
   TILE_SIZE: 24,       // Size of one grid tile (pixels)
   GRID_COLS: 26,       // Width of map in tiles
   GRID_ROWS: 26,       // Height of map in tiles
+  NET_TICK_RATE: 30,   // Updates per second in multiplayer mode
+
   
   // Canvas size will be 26 * 24 = 624px
   get CANVAS_WIDTH() { return this.TILE_SIZE * this.GRID_COLS; },
