@@ -1115,9 +1115,10 @@ class GameEngine {
       }
     };
 
-    this.wsConnection.onclose = () => {
+    this.wsConnection.onclose = (event) => {
+      console.warn(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'None'}, Clean: ${event.wasClean}`);
       if (this.isRemote) {
-        alert('联机已断开，返回主菜单。');
+        alert(`联机已断开 (代码: ${event.code}${event.reason ? ', 原因: ' + event.reason : ''})，返回主菜单。`);
         this.disconnectWs();
         this.changeState('MENU');
       }

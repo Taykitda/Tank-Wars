@@ -65,7 +65,9 @@ manager = ConnectionManager()
 @app.websocket("/ws/room/{room_id}/{player_index}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str, player_index: str):
     idx = int(player_index)
+    print(f"[WebSocket] Connecting player {idx} to room '{room_id}'...")
     await manager.connect(websocket, room_id, idx)
+    print(f"[WebSocket] Player {idx} successfully connected to room '{room_id}'.")
     try:
         while True:
             data = await websocket.receive_text()
@@ -73,9 +75,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_index: s
             # Broker the message to the other player in this room
             await manager.broadcast_to_other(room_id, idx, message)
     except WebSocketDisconnect:
+        print(f"[WebSocket] Player {idx} disconnected from room '{room_id}' (WebSocketDisconnect).")
         manager.disconnect(room_id, idx)
         await manager.send_to_player(room_id, 1 - idx, {"type": "PEER_DISCONNECTED"})
-    except Exception:
+    except Exception as e:
+        print(f"[WebSocket] Exception for player {idx} in room '{room_id}': {e}")
+        import traceback
+        traceback.print_exc()
         manager.disconnect(room_id, idx)
         await manager.send_to_player(room_id, 1 - idx, {"type": "PEER_DISCONNECTED"})
 
@@ -95,5 +101,6 @@ if __name__ == "__main__":
     import os
 
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Add ws_ping_interval and ws_ping_timeout for robust connection keep-alive behind Render proxy
+    uvicorn.run(app, host="0.0.0.0", port=port, ws_ping_interval=20, ws_ping_timeout=20)
 

@@ -135,6 +135,10 @@ body {
   pointer-events: none;
 }
 
+.hidden:not(.game-screen) {
+  display: none !important;
+}
+
 /* Landing Menu Screen details */
 #menuScreen {
   background: radial-gradient(circle at center, rgba(12, 10, 42, 0.9) 0%, rgba(3, 3, 8, 0.98) 100%);
