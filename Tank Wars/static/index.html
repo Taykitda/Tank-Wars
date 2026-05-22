@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyberpunk Tank Battle | 霓虹坦克大战</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- Retro CRT Scanline Overlay -->
+  <div class="crt-overlay" id="crtOverlay"></div>
+
+  <!-- Primary Game Shell -->
+  <div class="game-container" id="gameShell">
+    
+    <!-- Left Area: Canvas screen & Menu panels -->
+    <div class="screen-panel" id="screenPanel">
+      
+      <!-- HTML5 Canvas for high-performance rendering -->
+      <canvas id="gameCanvas" width="624" height="624"></canvas>
+
+      <!-- SCREEN 1: Main Landing Menu -->
+      <div class="game-screen" id="menuScreen">
+        <div class="title-container">
+          <h1 class="game-title">TANK BATTLE</h1>
+          <div class="game-subtitle">Neon Synthwave</div>
+        </div>
+        <div class="menu-options">
+          <button class="btn" id="btnSinglePlayer">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            单人战役
+          </button>
+          <button class="btn btn-secondary" id="btnCoOp">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            本地双人
+          </button>
+          <button class="btn" id="btnEditor">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            地图编辑器
+          </button>
+          <button class="btn btn-secondary" id="btnInstructions">
+            操作指南
+          </button>
+        </div>
+      </div>
+
+      <!-- SCREEN 2: Level / Campaign Selection -->
+      <div class="game-screen hidden" id="levelSelectScreen">
+        <h2 class="victory-title">选择战役关卡</h2>
+        <div class="level-select-grid" id="levelCardGrid">
+          <!-- Dynamic level cards populated by game.js -->
+        </div>
+        <button class="back-btn" id="btnLevelBack">返回主菜单</button>
+      </div>
+
+      <!-- SCREEN 3: Operation Guides -->
+      <div class="game-screen hidden" id="instructionsScreen">
+        <h2 class="game-subtitle" style="margin-bottom: 20px;">操作指南</h2>
+        <div class="instructions-panel">
+          
+          <!-- P1 keyboard controls -->
+          <div class="player-instruction-col p1-col">
+            <h3>玩家 1 (蓝色战机)</h3>
+            <div class="instruction-row">
+              <span class="hud-label">移动坦克</span>
+              <span class="instruction-keys"><span class="control-guide-icon">W</span> <span class="control-guide-icon">A</span> <span class="control-guide-icon">S</span> <span class="control-guide-icon">D</span></span>
+            </div>
+            <div class="instruction-row">
+              <span class="hud-label">发射激光</span>
+              <span class="instruction-keys"><span class="control-guide-icon">Space (空格)</span></span>
+            </div>
+          </div>
+          
+          <!-- P2 keyboard controls -->
+          <div class="player-instruction-col p2-col">
+            <h3>玩家 2 (粉色战机)</h3>
+            <div class="instruction-row">
+              <span class="hud-label">移动坦克</span>
+              <span class="instruction-keys"><span class="control-guide-icon">↑</span> <span class="control-guide-icon">←</span> <span class="control-guide-icon">↓</span> <span class="control-guide-icon">→</span></span>
+            </div>
+            <div class="instruction-row">
+              <span class="hud-label">发射激光</span>
+              <span class="instruction-keys"><span class="control-guide-icon">Enter</span> / <span class="control-guide-icon">Num 0</span></span>
+            </div>
+          </div>
+
+        </div>
+        
+        <div style="font-size: 12px; color: var(--neon-orange); margin-bottom: 20px; line-height: 1.6; text-align: center;">
+          <strong>提示:</strong> 摧毁闪烁红色光环的敌军坦克可掉落强化胶囊。<br>
+          胶囊提供：能量护盾、时空停滞、基地钢化、火炮升级、核弹轰炸、增加生命、穿甲弹头！
+        </div>
+
+        <button class="back-btn" id="btnInstructionsBack">返回主菜单</button>
+      </div>
+
+      <!-- SCREEN 4: Game Over Overlay -->
+      <div class="game-screen hidden" id="gameOverScreen" style="background: rgba(10, 0, 0, 0.9);">
+        <h2 class="modal-title">MISSION FAILED</h2>
+        <div class="modal-text">鹰巢总部已被摧毁或您的装甲耗尽</div>
+        <div class="menu-options">
+          <button class="btn btn-secondary" id="btnRetry">重新挑战</button>
+          <button class="btn" id="btnGameOverMenu">返回主菜单</button>
+        </div>
+      </div>
+
+      <!-- SCREEN 5: Level Complete / Victory Overlay -->
+      <div class="game-screen hidden" id="victoryScreen" style="background: rgba(0, 10, 5, 0.9);">
+        <h2 class="victory-title" id="victoryTitle">STAGE CLEAR</h2>
+        <div class="modal-text" id="victorySubtitle">敌军已被消灭，战役获得胜利！</div>
+        <div class="menu-options">
+          <button class="btn" id="btnNextLevel">进入下一关</button>
+          <button class="btn btn-secondary" id="btnVictoryMenu">返回主菜单</button>
+        </div>
+      </div>
+
+      <!-- SCREEN 6: Pause Menu overlay -->
+      <div class="game-screen hidden" id="pauseOverlay" style="background: rgba(3, 3, 8, 0.7); backdrop-filter: blur(4px);">
+        <h2 class="game-subtitle" style="font-size: 24px; margin-bottom: 30px;">游戏已暂停</h2>
+        <div class="menu-options" style="width: 240px;">
+          <button class="btn" id="btnResume">继续游戏</button>
+          <button class="btn btn-secondary" id="btnQuitGame">退出至主菜单</button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right Area: Sidebar for real-time stats and editor tools -->
+    <div class="hud-panel" id="hudPanel">
+      
+      <!-- Panel Header -->
+      <div class="hud-header">
+        <h2 class="hud-title">CONTROL CENTER</h2>
+      </div>
+
+      <!-- STATS GROUP 1: Global battle details -->
+      <div class="global-stats" id="globalStatsBlock">
+        <div class="hud-row">
+          <span class="hud-label">当前战役:</span>
+          <span class="hud-value" id="hudLevelVal" style="color: var(--neon-orange);">关卡 1</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">剩余敌军:</span>
+          <span class="hud-value" id="hudEnemiesLeft" style="color: var(--neon-red);">20</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">最高得分:</span>
+          <span class="hud-value" id="hudHighScoreVal" style="color: var(--neon-yellow);">00000</span>
+        </div>
+      </div>
+
+      <!-- STATS GROUP 2: Player 1 stats card -->
+      <div class="player-status-card p1-active" id="p1Card">
+        <div class="player-card-header">
+          <span class="player-name p1-name">P1 NEON CYAN</span>
+          <span class="player-score" id="p1ScoreVal">0</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">装甲生命:</span>
+          <span class="hud-value" id="p1HealthVal" style="color: var(--neon-cyan);">100%</span>
+        </div>
+        <div class="bar-container">
+          <div class="health-bar p1-hp" id="p1HealthBar" style="width: 100%;"></div>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">战机备件:</span>
+          <span class="hud-value" id="p1LivesVal">3</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">武器级别:</span>
+          <span class="hud-value" id="p1TierVal" style="color: var(--neon-cyan);">级 1</span>
+        </div>
+      </div>
+
+      <!-- STATS GROUP 3: Player 2 stats card (conditional) -->
+      <div class="player-status-card hidden" id="p2Card">
+        <div class="player-card-header">
+          <span class="player-name p2-name">P2 NEON PINK</span>
+          <span class="player-score" id="p2ScoreVal">0</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">装甲生命:</span>
+          <span class="hud-value" id="p2HealthVal" style="color: var(--neon-magenta);">100%</span>
+        </div>
+        <div class="bar-container">
+          <div class="health-bar p2-hp" id="p2HealthBar" style="width: 100%;"></div>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">战机备件:</span>
+          <span class="hud-value" id="p2LivesVal">3</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">武器级别:</span>
+          <span class="hud-value" id="p2TierVal" style="color: var(--neon-magenta);">级 1</span>
+        </div>
+      </div>
+
+      <!-- STATS GROUP 4: Level Editor Sidebar layout -->
+      <div class="editor-sidebar hidden" id="editorSidebar">
+        <div class="hud-header">
+          <h2 class="hud-title" style="font-size: 11px;">元素画笔 palette</h2>
+        </div>
+        <div class="palette-container" id="editorPalette">
+          <!-- Populated by editor.js: tiles selectors -->
+        </div>
+        
+        <div class="menu-options" style="gap: 8px;">
+          <button class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;" id="btnEditorPlay">
+            测试试玩
+          </button>
+          <button class="btn" style="padding: 8px 12px; font-size: 12px;" id="btnEditorSave">
+            保存地图
+          </button>
+          <button class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;" id="btnEditorLoad">
+            载入地图
+          </button>
+          <button class="btn" style="padding: 8px 12px; font-size: 12px; border-color: rgba(255,49,49,0.3);" id="btnEditorClear">
+            清空网格
+          </button>
+        </div>
+        <button class="back-btn" style="margin-top: 10px; text-align: center;" id="btnEditorQuit">退出编辑器</button>
+      </div>
+
+      <!-- Settings and Visual settings -->
+      <div class="settings-block">
+        <div class="toggle-row">
+          <span>电子音乐 BGM</span>
+          <label class="switch">
+            <input type="checkbox" id="toggleMusic" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <span>音响特效 SFX</span>
+          <label class="switch">
+            <input type="checkbox" id="toggleSFX" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <span>CRT 显像管扫描线</span>
+          <label class="switch">
+            <input type="checkbox" id="toggleCRT" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Load all Modular Javascript files using ES6 import -->
+  <script type="module" src="/static/js/game.js"></script>
+
+</body>
+</html>
